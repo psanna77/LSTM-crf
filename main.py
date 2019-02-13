@@ -60,7 +60,7 @@ class LSTMTagger(nn.Module):
 
 
 ##################### Trainer #####################
-if __name__ = '__main__':
+if __name__ == '__main__':
     training_data = [
     ("The dog ate the apple".split(), ["DET", "NN", "V", "DET", "NN"]),
     ("Everybody read that book".split(), ["NN", "V", "DET", "NN"])
