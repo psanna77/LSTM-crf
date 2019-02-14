@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from random import *
 
 torch.manual_seed(1)
 
@@ -62,67 +63,89 @@ class LSTMTagger(nn.Module):
 ##################### Trainer #####################
 if __name__ == '__main__':
     training_data = [
-    (list("The dog ate the apple"), ["DET", "NN", "V", "DET", "NN"]),
-    (list("Everybody read that book"), ["NN", "V", "DET", "NN"])
+    (list("apple"), ["A", "P", "P", "L", "E"]),
+        (list("book"), ["B", "O", "O", "K"]),
+        (list("cat"), ["C", "A", "T"]),
+        (list("dog"), ["D", "O", "G"])
     ]
-    char_to_ix = {}
-    for chars, tags in training_data:
-        for ch in chars:
-            if ch not in char_to_ix:
-                char_to_ix[ch] = len(char_to_ix)
-    print(char_to_ix)
-    tag_to_ix = {"DET": 0, "NN": 1, "V": 2}
+    char_to_ix_HRL = {}
+    char_to_ix_EN = {}
+    for chars_HRL, chars_EN in training_data:
+        for ch in chars_HRL:
+            if ch not in char_to_ix_HRL:
+                char_to_ix_HRL[ch] = len(char_to_ix_HRL)
+
+        for ch in chars_EN:
+            if ch not in char_to_ix_EN:
+                char_to_ix_EN[ch] = len(char_to_ix_EN)
+                
+    print(char_to_ix_HRL)
+    print(char_to_ix_EN)
 
     # These will usually be more like 32 or 64 dimensional.
     # We will keep them small, so we can see how the weights change as we train.
-    EMBEDDING_DIM = 6
-    HIDDEN_DIM = 6
+    EMBEDDING_DIM = 20
+    HIDDEN_DIM = 20
 
-    model = LSTMTagger(EMBEDDING_DIM, HIDDEN_DIM, len(char_to_ix), len(tag_to_ix))
-    loss_function = nn.NLLLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    model_HRL = LSTMTagger(EMBEDDING_DIM, HIDDEN_DIM, len(char_to_ix_HRL), len(char_to_ix_HRL))
+    model_EN = LSTMTagger(EMBEDDING_DIM, HIDDEN_DIM, len(char_to_ix_EN), len(char_to_ix_EN))
+    
+    loss_function = nn.MarginRankingLoss()
+    
+    optimizer_HRL = optim.SGD(model_HRL.parameters(), lr=0.1)
+    optimizer_EN = optim.SGD(model_EN.parameters(), lr=0.1)
 
     # See what the scores are before training
     # Note that element i,j of the output is the score for tag j for word i.
     # Here we don't need to train, so the code is wrapped in torch.no_grad()
     with torch.no_grad():
-        inputs = prepare_sequence(training_data[0][0], char_to_ix)
-        tag_scores = model(inputs)
+        inputs = prepare_sequence(training_data[0][0], char_to_ix_HRL)
+        tag_scores = model_HRL(inputs)
         print(tag_scores)
 
     for epoch in range(300):  # again, normally you would NOT do 300 epochs, it is toy data
-        for char_list, tags in training_data:
+        for char_list_HRL, char_list_EN in training_data:
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
-            model.zero_grad()
+            model_HRL.zero_grad()
+            model_EN.zero_grad()
 
             # Also, we need to clear out the hidden state of the LSTM,
             # detaching it from its history on the last instance.
-            model.hidden = model.init_hidden()
+            model_HRL.hidden = model_HRL.init_hidden()
+            model_EN.hidden = model_EN.init_hidden()
 
             # Step 2. Get our inputs ready for the network, that is, turn them into
             # Tensors of word indices.
-            char_list_in = prepare_sequence(char_list, char_to_ix)
-            targets = prepare_sequence(tags, tag_to_ix)
+            char_list_in_HRL = prepare_sequence(char_list_HRL, char_to_ix_HRL)
+            char_list_in_EN = prepare_sequence(char_list_EN, char_to_ix_EN)
+
+            random_char_list = []
+            for i in range(len(char_list_HRL)):
+                random_sample = training_data[randint(0, len(training_data) - 1)][1]
+                random_char_list.append(random_sample[i % len(random_sample)])
+            char_list_in_RAND = prepare_sequence(random_char_list, char_to_ix_EN)
+            
+            targets_HRL = prepare_sequence(char_list_EN, char_to_ix_EN)
+            targets_EN = prepare_sequence(char_list_HRL, char_to_ix_HRL)
 
             # Step 3. Run our forward pass.
-            tag_scores = model(char_list_in)
+            tag_scores_HRL = model_HRL(char_list_in_HRL)
+            tag_scores_EN = model_EN(char_list_in_EN)
 
+            # print(tag_scores_HRL)
+            rand_score = model_EN(char_list_in_RAND)
+            # print(rand_score)
+            
             # Step 4. Compute the loss, gradients, and update the parameters by
             #  calling optimizer.step()
-            loss = loss_function(tag_scores, targets)
+            v_HRL = F.cosine_similarity(tag_scores_HRL, tag_scores_EN)
+            # print(tag_scores_HRL)
+            # print(rand_score)
+            v_EN = F.cosine_similarity(tag_scores_HRL, rand_score)
+
+            loss = loss_function(v_HRL, v_EN, torch.FloatTensor([1]))
             loss.backward()
-            optimizer.step()
-
-    # See what the scores are after training
-    with torch.no_grad():
-        inputs = prepare_sequence(training_data[0][0], char_to_ix)
-        tag_scores = model(inputs)
-
-        # The sentence is "the dog ate the apple".  i,j corresponds to score for tag j
-        # for word i. The predicted tag is the maximum scoring tag.
-        # Here, we can see the predicted sequence below is 0 1 2 0 1
-        # since 0 is index of the maximum value of row 1,
-        # 1 is the index of maximum value of row 2, etc.
-        # Which is DET NOUN VERB DET NOUN, the correct sequence!
-        print(tag_scores)
+            print(loss)
+            optimizer_HRL.step()
+            optimizer_EN.step()
